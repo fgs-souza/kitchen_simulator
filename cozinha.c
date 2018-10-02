@@ -6,18 +6,18 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-// Semáfaros para todos os recursos que possuem número limitado
-sem_t balcao, bocas, frigideiras, cozinheiros, garcons;
+sem_t balcao, bocas, frigideiras, cozinheiros, garcons; // Semáfaros para todos os recursos que possuem número limitado
 pthread_t *buffer_pedidos, *buffer_garcons; // Buffer circular de threads representando os pedidos
 char *possui_pedido;  // possui_pedido[i] = 1, se buffer_pedidos[i] possui uma thread ainda em execução. 0 caso contrário.
-pthread_mutex_t mtx, mtx_garcon; // Mutex para garantir consistência na alteração de possui_pedido
-int gnum_cozinheiros, gnum_garcons, g_index; // Global contendo o número de cozinheiros e garcons para ser utilizada como tamanho dos buffers
+pthread_mutex_t mtx, mtx_garcon; // Mutex para garantir consistência na alteração de possui_pedido e de g_index
+int gnum_cozinheiros, gnum_garcons;// Global contendo o número de cozinheiros e garcons para ser utilizada como tamanho dos buffers
+int g_index; // Global contendo o indice livre atual do buffer de garçons
 
 void cozinha_init(int num_cozinheiros, int num_bocas, int num_frigideiras, int num_garcons, int tam_balcao){
 
-	buffer_pedidos = malloc(sizeof(pthread_t) * num_cozinheiros); // Incializa o buffer com tamanho num_cozinheiros
+	buffer_pedidos = malloc(sizeof(pthread_t) * num_cozinheiros); 
 	buffer_garcons = malloc(sizeof(pthread_t) * num_garcons);
-	possui_pedido = calloc(num_cozinheiros, sizeof(char)*num_cozinheiros); // Inicializa e preenche com 0 o vetor auxiliar
+	possui_pedido = calloc(num_cozinheiros, sizeof(char)*num_cozinheiros); // Inicializa e preenche com 0
 	g_index = 0;
 
 	pthread_mutex_init(&mtx, NULL);
@@ -32,8 +32,8 @@ void cozinha_init(int num_cozinheiros, int num_bocas, int num_frigideiras, int n
 
 void cozinha_destroy(){
 
-	// Aguarda a conclusão de todas as threads, para garantir que o programa
-	// não encerre enquanto alguma thread ainda está em execução
+	// Aguarda a conclusão de todas as threads, cozinheiras e garçons, para garantir que o programa
+	// não encerre enquanto algum pedido ainda está em execução
 
 	for(int i = 0; i < gnum_cozinheiros; i++){
 		pthread_mutex_lock(&mtx);
