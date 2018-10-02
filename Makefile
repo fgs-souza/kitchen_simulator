@@ -1,4 +1,4 @@
-CFLAGS=-pthread -D_POSIX_C_SOURCE=200809L -g -O0 -fsanitize=address
+CFLAGS=-pthread -D_POSIX_C_SOURCE=200809L #-g -O0 -fsanitize=address
 LFLAGS=
 OUTPUT=program
 LIBS=-lm

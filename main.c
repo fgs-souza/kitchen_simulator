@@ -87,7 +87,7 @@ int main(int argc, char** argv) {
     int next_id = 1;
     int ret = 0;
     while((ret = scanf("%4095s", buf)) > 0) {
-        pedido_t p = {next_id++, pedido_prato_from_name(buf)};
+        pedido_t p = {next_id++, -1, pedido_prato_from_name(buf)};
         if (!p.prato) 
             fprintf(stderr, "Pedido inválido descartado: \"%s\"\n", buf);
         else 

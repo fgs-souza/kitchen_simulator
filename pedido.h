@@ -11,6 +11,7 @@ typedef enum {
 
 typedef struct {
     unsigned id;
+    int index;
     pedido_prato_t prato;
 } pedido_t;
 

@@ -7,49 +7,50 @@
 #include <stdio.h>
 
 // Semáfaros para todos os recursos que possuem número limitado
-sem_t balcao;
-sem_t bocas;
-sem_t frigideiras;
-sem_t cozinheiros;
-sem_t garcons;
-pthread_t* buffer_pedidos; // Buffer circular de threads representando os pedidos
-int inicio_pedidos, fim_pedidos; // Indice do primeiro e ultimo pedido atualmente no buffer circular
-pthread_mutex_t mtxIndice; // Mutex para garantir consistência na alteração dos indíces globais acima
-int gnum_cozinheiros; // Global contendo o número de cozinheiros para ser utilizada como tamanho do buffer
+sem_t balcao, bocas, frigideiras, cozinheiros, garcons;
+pthread_t *buffer_pedidos, *buffer_garcons; // Buffer circular de threads representando os pedidos
+char *possui_pedido;  // possui_pedido[i] = 1, se buffer_pedidos[i] possui uma thread ainda em execução. 0 caso contrário.
+pthread_mutex_t mtx, mtx_garcon; // Mutex para garantir consistência na alteração de possui_pedido
+int gnum_cozinheiros, gnum_garcons, g_index; // Global contendo o número de cozinheiros e garcons para ser utilizada como tamanho dos buffers
 
 void cozinha_init(int num_cozinheiros, int num_bocas, int num_frigideiras, int num_garcons, int tam_balcao){
 
-	inicio_pedidos = 0;
-	fim_pedidos = 0;
-
 	buffer_pedidos = malloc(sizeof(pthread_t) * num_cozinheiros); // Incializa o buffer com tamanho num_cozinheiros
+	buffer_garcons = malloc(sizeof(pthread_t) * num_garcons);
+	possui_pedido = calloc(num_cozinheiros, sizeof(char)*num_cozinheiros); // Inicializa e preenche com 0 o vetor auxiliar
+	g_index = 0;
 
-	pthread_mutex_init(&mtxIndice, NULL);
+	pthread_mutex_init(&mtx, NULL);
+	pthread_mutex_init(&mtx_garcon, NULL);
 	sem_init(&balcao, 0, tam_balcao);
 	sem_init(&bocas, 0, num_bocas);
 	sem_init(&frigideiras, 0, num_frigideiras);
 	sem_init(&cozinheiros, 0, gnum_cozinheiros = num_cozinheiros);
-	sem_init(&garcons, 0, num_garcons);
+	sem_init(&garcons, 0, gnum_garcons = num_garcons);
 
 }
 
 void cozinha_destroy(){
 
-	// Cria versão local do valor inicio_pedidos para não ocorrer data race
-	// Ñão é necessário para fim_pedidos, pois ele não é modificado ou acessado pelas threads
-	pthread_mutex_lock(&mtxIndice);
-	int inicio = inicio_pedidos; 
-	pthread_mutex_unlock(&mtxIndice);
-
 	// Aguarda a conclusão de todas as threads, para garantir que o programa
 	// não encerre enquanto alguma thread ainda está em execução
-	for(int i = inicio; i < fim_pedidos; i++){
-		pthread_join(buffer_pedidos[i], NULL);
+
+	for(int i = 0; i < gnum_cozinheiros; i++){
+		pthread_mutex_lock(&mtx);
+		if(possui_pedido[i] == 1){
+			pthread_mutex_unlock(&mtx);
+			pthread_join(buffer_pedidos[i], NULL);
+		}
+		pthread_mutex_unlock(&mtx);
+	}
+
+	for(int i = 0; i < gnum_garcons; i++){
+		pthread_join(buffer_garcons[i], NULL);
 	}
 
 	free(buffer_pedidos);
 
-	pthread_mutex_destroy(&mtxIndice);
+	pthread_mutex_destroy(&mtx);
 	sem_destroy(&balcao);
 	sem_destroy(&bocas);
 	sem_destroy(&frigideiras);
@@ -58,18 +59,28 @@ void cozinha_destroy(){
 
 }
 
+void* worker_garcons(void* arg){
+	prato_t* p = (prato_t *) arg;
+	entregar_pedido(p);
+	sem_post(&garcons);
+	pthread_exit(NULL);
+}
 // Função utilizada em toda receita para finalizar um prato
-void finalizar_prato(prato_t* prato){
+void finalizar_prato(pedido_t* pedido, prato_t* prato){
 	sem_wait(&balcao); // Aguarda espaço no balcão
 	notificar_prato_no_balcao(prato);
+	pthread_mutex_lock(&mtx);
+	possui_pedido[pedido->index] = 0;
+	pthread_mutex_unlock(&mtx);
 	sem_post(&cozinheiros); // Adquiriu um espaço para o prato no balcão, cozinheiro pode ser liberado
 	sem_wait(&garcons); // Espera um garçom
 	sem_post(&balcao); // Garçom tirou o prato do balcão, liberando espaço
-	entregar_pedido(prato);
-	sem_post(&garcons); // Pedido entregue, garçom disponível
-	pthread_mutex_lock(&mtxIndice);
-	inicio_pedidos = (inicio_pedidos+1)%gnum_cozinheiros; // Pedido finalizado, incrementa o indíce que marca o primeiro pedido do buffer
-	pthread_mutex_unlock(&mtxIndice);
+	pthread_create(&buffer_garcons[g_index], NULL, worker_garcons, (void *) prato);
+	pthread_mutex_lock(&mtx_garcon);
+	g_index = (g_index+1) % gnum_garcons;
+	pthread_mutex_unlock(&mtx_garcon);
+	free(pedido);
+	pthread_detach(pthread_self());
 }
 
 typedef enum {
@@ -136,10 +147,7 @@ void *processar_carne(void * arg){
 
 	empratar_carne(carne, prato);
 
-	finalizar_prato(prato);
-	free(arg);
-	pthread_detach(pthread_self()); // Devolve os recursos do sistema, pois apenas as threads presentes no buffer
-									// na destrução da cozinha são "joinadas". Chamado ao final de toda receita.
+	finalizar_prato(arg, prato);
 	pthread_exit(NULL);
 }
 
@@ -184,9 +192,7 @@ void *processar_spaghetti(void * arg){
 	free(agua);
 	empratar_spaghetti(spaghetti, molho, bacon, prato);
 
-	finalizar_prato(prato);
-	free(arg);
-	pthread_detach(pthread_self());
+	finalizar_prato(arg, prato);
 	pthread_exit(NULL);
 }
 
@@ -221,10 +227,8 @@ void *processar_sopa(void * arg){
 
 	empratar_sopa(legumes, caldo, prato);
 
-	finalizar_prato(prato);
-	free(arg);
 	free(ferver_agua);
-	pthread_detach(pthread_self());
+	finalizar_prato(arg, prato);
 	pthread_exit(NULL);
 }
 
@@ -239,20 +243,37 @@ void processar_pedido(pedido_t p){
 	// Cozinheiro é devolvido ao final de cada pedido, em suas próprias funções
 	sem_wait(&cozinheiros);
 
+	for(int i = 0; i < gnum_cozinheiros; i++){
+		pthread_mutex_lock(&mtx);
+		if(possui_pedido[i] == 0){
+			pthread_mutex_unlock(&mtx);
+			pedido->index = i;
+			break;
+		}
+		pthread_mutex_unlock(&mtx);
+	}
+
+	possui_pedido[pedido->index] = 1; // Não é necessário mutex aqui, pois acima foi checado que possui_pedido[index] possui 0,
+									  // o que significa que nenhuma thread está executando em buffer_pedidos[index], e threads
+									  // apenas alteram possui_pedidos no mesmo index em que se encontram em buffer_pedidos.
+
+									  // A outra utilização de possui_pedido é em cozinha_destroy(), que só é chamado pela própria
+									  // thread principal, após todos os pedidos terem passado por processar_pedido();
+
 	// Decodifica o pedido e inicia uma thread para sua execução
 	switch(p.prato){
 		case PEDIDO_SPAGHETTI:
-			pthread_create(&buffer_pedidos[fim_pedidos], NULL, processar_spaghetti, (void *) pedido); 
+			pthread_create(&buffer_pedidos[pedido->index], NULL, processar_spaghetti, (void *) pedido); 
 			printf("Pedido (SPAGHETTI) submetido!\n");
 			break;
  
 		case PEDIDO_SOPA:
-			pthread_create(&buffer_pedidos[fim_pedidos], NULL, processar_sopa, (void *) pedido);
+			pthread_create(&buffer_pedidos[pedido->index], NULL, processar_sopa, (void *) pedido);
 			printf("Pedido (SOPA) submetido!\n");
 			break;
 
 		case PEDIDO_CARNE:
-			pthread_create(&buffer_pedidos[fim_pedidos], NULL, processar_carne, (void *) pedido);
+			pthread_create(&buffer_pedidos[pedido->index], NULL, processar_carne, (void *) pedido);
 			printf("Pedido (CARNE) submetido!\n");
 			break;
 
@@ -263,8 +284,5 @@ void processar_pedido(pedido_t p){
 
 	}
 
-	fim_pedidos = (fim_pedidos + 1) % gnum_cozinheiros; // Não é necesário mutex, pois apenas a thread principal
-														// altera fim_pedidos. A única outra função que utiliza 
-														// fim_pedidos é cozinha_destroy(), que só será chamada
-														// após todas as chamadas de processar_pedido().
+
 }
